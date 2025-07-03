@@ -638,7 +638,6 @@ std::string MasterController::get_current_timestamp_str() {
     auto now = std::chrono::system_clock::now();
     auto time_t = std::chrono::system_clock::to_time_t(now);
 
-  
     std::tm tm;
     localtime_r(&time_t, &tm);
     
@@ -695,6 +694,11 @@ void MasterController::start_monitor_thread() {
         log_message("Status monitor thread started");
         running_ = true;
 
+
+    monitor_thread_ = std::thread([this]() {
+        log_message("Status monitor thread started");
+        running_ = true;
+
     status_thread_ = std::thread([this]() {
         log_message("Status monitor thread started");
 
@@ -718,6 +722,7 @@ void MasterController::start_monitor_thread() {
         }
         log_message("Status monitor thread exiting");
 
+
                 auto res = status_socket_.recv(msg, zmq::recv_flags::none);
                 if (res.has_value()) {
                     std::string msg_str(static_cast<char*>(msg.data()), msg.size());
@@ -737,6 +742,7 @@ void MasterController::start_monitor_thread() {
             }
         }
         log_message("Status monitor thread stopped");
+
 
     });
 }

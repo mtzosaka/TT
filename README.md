@@ -48,6 +48,23 @@ Communication between components uses ZeroMQ sockets:
 
 This will create the `master_timestamp` and `slave_timestamp` executables in the `build` directory.
 
+### Quick Start Example
+
+To quickly verify that the master and slave communicate correctly, open two terminal windows and run the components with their default port numbers. Start the slave first:
+
+```bash
+./build/slave_timestamp --slave-tc 127.0.0.1 --master-address 127.0.0.1 --verbose
+```
+
+Then launch the master:
+
+```bash
+./build/master_timestamp --master-tc 127.0.0.1 --slave-address 127.0.0.1 \
+  --duration 2.0 --channels 1,2,3,4 --verbose
+```
+
+Both programs will use the default port values listed below, so no extra options are required unless you need to change the ports.
+
 ## Usage
 
 ### Running the Slave
