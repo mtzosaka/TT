@@ -35,7 +35,7 @@ bool MasterController::initialize() {
         // Socket for sending trigger commands to slave
         log_message("Creating trigger socket (PUB)...");
         trigger_socket_ = zmq::socket_t(context_, zmq::socket_type::pub);
-        std::string trigger_endpoint = "tcp://*:5557";
+        std::string trigger_endpoint = "tcp://*:" + std::to_string(config_.trigger_port);
         log_message("Binding trigger socket to: " + trigger_endpoint);
         trigger_socket_.bind(trigger_endpoint);
         log_message("Trigger socket bound");
@@ -43,7 +43,7 @@ bool MasterController::initialize() {
         // Socket for receiving files from slave
         log_message("Creating file socket (PULL)...");
         file_socket_ = zmq::socket_t(context_, zmq::socket_type::pull);
-        std::string file_endpoint = "tcp://*:5559";
+        std::string file_endpoint = "tcp://*:" + std::to_string(config_.file_port);
         log_message("Binding file socket to: " + file_endpoint);
         file_socket_.bind(file_endpoint);
         log_message("File socket bound");
@@ -51,10 +51,18 @@ bool MasterController::initialize() {
         // Socket for sending commands to slave
         log_message("Creating command socket (REQ)...");
         command_socket_ = zmq::socket_t(context_, zmq::socket_type::req);
-        std::string command_endpoint = "tcp://" + config_.slave_address + ":5560";
+        std::string command_endpoint = "tcp://" + config_.slave_address + ":" + std::to_string(config_.command_port);
         log_message("Connecting command socket to: " + command_endpoint);
         command_socket_.connect(command_endpoint);
         log_message("Command socket connected");
+
+        // Socket for receiving status/heartbeat messages
+        log_message("Creating status socket (PULL)...");
+        status_socket_ = zmq::socket_t(context_, zmq::socket_type::pull);
+        std::string status_endpoint = "tcp://*:" + std::to_string(config_.status_port);
+        log_message("Binding status socket to: " + status_endpoint);
+        status_socket_.bind(status_endpoint);
+        log_message("Status socket bound");
         
         // Socket for synchronization handshake
         log_message("Creating sync socket (PULL)...");
@@ -67,6 +75,7 @@ bool MasterController::initialize() {
         // Set socket options for better reliability
         int linger = 1000;  // 1 second linger period
         sync_socket_.set(zmq::sockopt::linger, linger);
+        status_socket_.set(zmq::sockopt::linger, linger);
         
         // Connect to local Time Controller
         log_message("Connecting to local Time Controller...");
@@ -130,6 +139,7 @@ void MasterController::stop() {
         try {
             trigger_socket_.close();
             file_socket_.close();
+            status_socket_.close();
             command_socket_.close();
             sync_socket_.close();
             local_tc_socket_.close();
@@ -613,7 +623,8 @@ void MasterController::log_message(const std::string& message, bool verbose_only
 std::string MasterController::get_current_timestamp_str() {
     auto now = std::chrono::system_clock::now();
     auto time_t = std::chrono::system_clock::to_time_t(now);
-    auto tm = *std::localtime(&time_t);
+    std::tm tm;
+    localtime_r(&time_t, &tm);
     
     std::ostringstream oss;
     oss << std::put_time(&tm, "%Y%m%d_%H%M%S");
@@ -659,8 +670,28 @@ void MasterController::write_offset_report(const std::string& filename,
 
 
 void MasterController::start_monitor_thread() {
-    // Simple implementation - can be enhanced later
-    log_message("Status monitor thread started");
+    monitor_thread_ = std::thread([this]() {
+        log_message("Status monitor thread started");
+        running_ = true;
+        status_socket_.set(zmq::sockopt::rcvtimeo, 1000);
+        while (running_) {
+            try {
+                zmq::message_t msg;
+                auto result = status_socket_.recv(msg, zmq::recv_flags::none);
+                if (result.has_value()) {
+                    std::string data(static_cast<char*>(msg.data()), msg.size());
+                    log_message("Status message from slave: " + data, true);
+                }
+            } catch (const zmq::error_t& e) {
+                if (e.num() != EAGAIN) {
+                    log_message("Status monitor error: " + std::string(e.what()), true);
+                }
+            } catch (const std::exception& e) {
+                log_message("Status monitor error: " + std::string(e.what()), true);
+            }
+        }
+        log_message("Status monitor thread exiting");
+    });
 }
 
 void MasterController::start_file_receiver_thread() {
