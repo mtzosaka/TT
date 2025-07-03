@@ -70,6 +70,7 @@ public:
     void request_partial_data_from_slave_with_response();
     void request_full_data_from_slave();
     void request_text_data_from_slave();
+    bool finalize_communication();
     
 private:
     // Configuration
@@ -78,6 +79,7 @@ private:
     // ZeroMQ context and sockets
     zmq::context_t context_;
     zmq::socket_t trigger_socket_;
+    zmq::socket_t status_socket_;
     zmq::socket_t file_socket_;
     zmq::socket_t command_socket_;
     zmq::socket_t sync_socket_;
@@ -101,6 +103,7 @@ private:
     
     // Thread management
     std::thread monitor_thread_;
+    std::thread status_thread_;
     std::thread file_receiver_thread_;
     std::mutex mutex_;
     
