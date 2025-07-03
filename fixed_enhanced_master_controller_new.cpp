@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <numeric>
+#include <vector>
 #include <cmath>
 #include <atomic>
 #include <mutex>
@@ -691,43 +692,20 @@ void MasterController::start_file_receiver_thread() {
                 zmq::message_t file_msg;
                 auto result = file_socket_.recv(file_msg);
                 
-                if (result.has_value()) {
-                    std::string file_data(static_cast<char*>(file_msg.data()), file_msg.size());
-                    
+                if (result.has_value() && file_msg.size() > 0) {
+                    // Save the raw binary message as a file
+                    std::string filename = "slave_file_" + std::to_string(file_counter_++) + ".bin";
+                    fs::path output_path = fs::path(config_.output_dir) / filename;
                     try {
-                        json file_json = json::parse(file_data);
-                        
-                        if (file_json.contains("type") && file_json["type"] == "heartbeat") {
-                            // Process heartbeat
-                            log_message("Received heartbeat from slave", true);
+                        std::ofstream outfile(output_path, std::ios::binary);
+                        if (!outfile) {
+                            throw std::runtime_error("Failed to open file for writing: " + output_path.string());
                         }
-                        else if (file_json.contains("filename") && file_json.contains("data")) {
-                            // Process file
-                            std::string filename = file_json["filename"].get<std::string>();
-                            std::string data = file_json["data"].get<std::string>();
-                            
-                            // Save file to output directory
-                            fs::path output_path = fs::path(config_.output_dir) / filename;
-                            
-                            try {
-                                std::ofstream outfile(output_path, std::ios::binary);
-                                if (!outfile) {
-                                    throw std::runtime_error("Failed to open file for writing: " + output_path.string());
-                                }
-                                
-                                outfile.write(data.c_str(), data.size());
-                                outfile.close();
-                                
-                                log_message("Received file from slave: " + filename);
-                                file_counter_++;
-                            }
-                            catch (const std::exception& e) {
-                                log_message("ERROR: Failed to save received file: " + std::string(e.what()));
-                            }
-                        }
-                    }
-                    catch (const std::exception& e) {
-                        log_message("ERROR: Failed to process received data: " + std::string(e.what()), true);
+                        outfile.write(static_cast<char*>(file_msg.data()), file_msg.size());
+                        outfile.close();
+                        log_message("Received file from slave: " + filename);
+                    } catch (const std::exception& e) {
+                        log_message("ERROR: Failed to save received file: " + std::string(e.what()));
                     }
                 }
             }

@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <numeric>
+#include <vector>
 #include <atomic>
 #include <mutex>
 #include <future>
@@ -710,9 +711,9 @@ void SlaveAgent::send_file_to_master(const std::string& filename) {
             throw std::runtime_error("File is empty: " + filename);
         }
         
-        // Read file content
-        std::string file_content(file_size, '\0');
-        file.read(&file_content[0], file_size);
+        // Read file content as binary
+        std::vector<uint8_t> file_content(file_size);
+        file.read(reinterpret_cast<char*>(file_content.data()), file_size);
         
         if (!file) {
             throw std::runtime_error("Failed to read file content: " + filename);
@@ -720,16 +721,9 @@ void SlaveAgent::send_file_to_master(const std::string& filename) {
         
         file.close();
         
-        // Create JSON message with file data
-        json file_msg;
-        file_msg["filename"] = fs::path(filename).filename().string();
-        file_msg["size"] = file_size;
-        file_msg["data"] = file_content;
-        
-        // Send the file
-        std::string msg_str = file_msg.dump();
-        zmq::message_t message(msg_str.size());
-        memcpy(message.data(), msg_str.c_str(), msg_str.size());
+        // Send the raw binary file content directly
+        zmq::message_t message(file_size);
+        memcpy(message.data(), file_content.data(), file_size);
         
         auto send_result = file_socket_.send(message, zmq::send_flags::none);
         if (!send_result.has_value()) {
