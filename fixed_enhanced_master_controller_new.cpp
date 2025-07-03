@@ -1,5 +1,5 @@
 // Fixed Master Controller with improved exception handling and thread safety
-#include "fixed_master_controller.hpp"
+#include "fixed_updated_master_controller.hpp"
 #include "common.hpp"
 #include "streams.hpp"
 #include <iostream>
@@ -53,10 +53,18 @@ bool MasterController::initialize() {
         // Socket for receiving files from slave
         log_message("Creating file socket (PULL)...");
         file_socket_ = zmq::socket_t(context_, zmq::socket_type::pull);
-        std::string file_endpoint = "tcp://*:" + std::to_string(config_.status_port);
+        std::string file_endpoint = "tcp://*:" + std::to_string(config_.file_port);
         log_message("Binding file socket to: " + file_endpoint);
         file_socket_.bind(file_endpoint);
         log_message("File socket bound");
+
+        // Socket for receiving status/heartbeat messages
+        log_message("Creating status socket (PULL)...");
+        status_socket_ = zmq::socket_t(context_, zmq::socket_type::pull);
+        std::string status_endpoint = "tcp://*:" + std::to_string(config_.status_port);
+        log_message("Binding status socket to: " + status_endpoint);
+        status_socket_.bind(status_endpoint);
+        log_message("Status socket bound");
         
         // Socket for sending commands to slave
         log_message("Creating command socket (REQ)...");
@@ -175,6 +183,13 @@ void MasterController::stop() {
                 if (file_socket_.handle() != nullptr) {
                     file_socket_.set(zmq::sockopt::linger, 0);
                     file_socket_.close();
+                }
+            } catch (...) {}
+
+            try {
+                if (status_socket_.handle() != nullptr) {
+                    status_socket_.set(zmq::sockopt::linger, 0);
+                    status_socket_.close();
                 }
             } catch (...) {}
             
@@ -787,10 +802,11 @@ void MasterController::log_message(const std::string& message, bool verbose_only
 std::string MasterController::get_current_timestamp_str() {
     auto now = std::chrono::system_clock::now();
     auto now_time_t = std::chrono::system_clock::to_time_t(now);
-    std::tm* now_tm = std::localtime(&now_time_t);
-    
+    std::tm now_tm;
+    localtime_r(&now_time_t, &now_tm);
+
     std::stringstream ss;
-    ss << std::put_time(now_tm, "%Y%m%d_%H%M%S");
+    ss << std::put_time(&now_tm, "%Y%m%d_%H%M%S");
     return ss.str();
 }
 

@@ -35,7 +35,7 @@ bool SlaveAgent::initialize() {
         // Socket for receiving trigger commands from master
         log_message("Creating trigger socket (SUB)...");
         trigger_socket_ = zmq::socket_t(context_, zmq::socket_type::sub);
-        std::string trigger_endpoint = "tcp://" + config_.master_address + ":5557";
+        std::string trigger_endpoint = "tcp://" + config_.master_address + ":" + std::to_string(config_.trigger_port);
         log_message("Connecting trigger socket to: " + trigger_endpoint);
         trigger_socket_.connect(trigger_endpoint);
         trigger_socket_.set(zmq::sockopt::subscribe, "");
@@ -44,15 +44,23 @@ bool SlaveAgent::initialize() {
         // Socket for sending files to master
         log_message("Creating file socket (PUSH)...");
         file_socket_ = zmq::socket_t(context_, zmq::socket_type::push);
-        std::string file_endpoint = "tcp://" + config_.master_address + ":5559";
+        std::string file_endpoint = "tcp://" + config_.master_address + ":" + std::to_string(config_.file_port);
         log_message("Connecting file socket to: " + file_endpoint);
         file_socket_.connect(file_endpoint);
         log_message("File socket connected");
+
+        // Socket for sending heartbeat/status messages
+        log_message("Creating status socket (PUSH)...");
+        status_socket_ = zmq::socket_t(context_, zmq::socket_type::push);
+        std::string status_endpoint = "tcp://" + config_.master_address + ":" + std::to_string(config_.status_port);
+        log_message("Connecting status socket to: " + status_endpoint);
+        status_socket_.connect(status_endpoint);
+        log_message("Status socket connected");
         
         // Socket for receiving commands from master
         log_message("Creating command socket (REP)...");
         command_socket_ = zmq::socket_t(context_, zmq::socket_type::rep);
-        std::string command_endpoint = "tcp://*:5560";
+        std::string command_endpoint = "tcp://*:" + std::to_string(config_.command_port);
         log_message("Binding command socket to: " + command_endpoint);
         command_socket_.bind(command_endpoint);
         log_message("Command socket bound");
@@ -68,6 +76,7 @@ bool SlaveAgent::initialize() {
         // Set socket options for better reliability
         int linger = 1000;  // 1 second linger period
         sync_socket_.set(zmq::sockopt::linger, linger);
+        status_socket_.set(zmq::sockopt::linger, linger);
         
         // Connect to local Time Controller
         log_message("Connecting to local Time Controller...");
@@ -141,6 +150,7 @@ void SlaveAgent::stop() {
         try {
             trigger_socket_.close();
             file_socket_.close();
+            status_socket_.close();
             command_socket_.close();
             sync_socket_.close();
             local_tc_socket_.close();
@@ -425,7 +435,7 @@ void SlaveAgent::start_heartbeat_thread() {
                     std::string heartbeat_str = heartbeat.dump();
                     zmq::message_t heartbeat_msg(heartbeat_str.size());
                     memcpy(heartbeat_msg.data(), heartbeat_str.c_str(), heartbeat_str.size());
-                    file_socket_.send(heartbeat_msg, zmq::send_flags::none);
+                    status_socket_.send(heartbeat_msg, zmq::send_flags::none);
                     
                     log_message("Sent heartbeat", true);
                 }
@@ -824,10 +834,11 @@ void SlaveAgent::log_message(const std::string& message, bool verbose_only) {
 std::string SlaveAgent::get_current_timestamp_str() {
     auto now = std::chrono::system_clock::now();
     auto now_time_t = std::chrono::system_clock::to_time_t(now);
-    std::tm* now_tm = std::localtime(&now_time_t);
+    std::tm now_tm;
+    localtime_r(&now_time_t, &now_tm);
     
     std::stringstream ss;
-    ss << std::put_time(now_tm, "%Y%m%d_%H%M%S");
+    ss << std::put_time(&now_tm, "%Y%m%d_%H%M%S");
     return ss.str();
 }
 
