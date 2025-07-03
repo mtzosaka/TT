@@ -4,6 +4,7 @@
 #include <sstream>
 #include <iomanip>
 #include <chrono>
+#include <ctime>
 #include <thread>
 #include <filesystem>
 #include <algorithm>
@@ -41,6 +42,15 @@ bool SlaveAgent::initialize() {
         trigger_socket_.set(zmq::sockopt::subscribe, "");
         log_message("Trigger socket connected and subscribed");
         
+        // Socket for sending status/heartbeat messages to master
+        log_message("Creating status socket (PUSH)...");
+        status_socket_ = zmq::socket_t(context_, zmq::socket_type::push);
+        std::string status_endpoint = "tcp://" + config_.master_address + ":" +
+                                     std::to_string(config_.status_port);
+        log_message("Connecting status socket to: " + status_endpoint);
+        status_socket_.connect(status_endpoint);
+        log_message("Status socket connected");
+
         // Socket for sending files to master
         log_message("Creating file socket (PUSH)...");
         file_socket_ = zmq::socket_t(context_, zmq::socket_type::push);
@@ -140,6 +150,7 @@ void SlaveAgent::stop() {
         // Close sockets
         try {
             trigger_socket_.close();
+            status_socket_.close();
             file_socket_.close();
             command_socket_.close();
             sync_socket_.close();
@@ -347,6 +358,16 @@ void SlaveAgent::start_command_handler_thread() {
                                 // We've already sent the response, so continue to next command
                                 continue;
                             }
+                            else if (command == "partial_data_ack") {
+                                log_message("Received partial data acknowledgment from master", true);
+                                response["status"] = "ok";
+                                response["message"] = "acknowledged";
+                            }
+                            else if (command == "finalize") {
+                                log_message("Master requested finalization", true);
+                                response["status"] = "ok";
+                                response["message"] = "finalization complete";
+                            }
                             else {
                                 response["status"] = "error";
                                 response["message"] = "Unknown command: " + command;
@@ -425,7 +446,7 @@ void SlaveAgent::start_heartbeat_thread() {
                     std::string heartbeat_str = heartbeat.dump();
                     zmq::message_t heartbeat_msg(heartbeat_str.size());
                     memcpy(heartbeat_msg.data(), heartbeat_str.c_str(), heartbeat_str.size());
-                    file_socket_.send(heartbeat_msg, zmq::send_flags::none);
+                    status_socket_.send(heartbeat_msg, zmq::send_flags::none);
                     
                     log_message("Sent heartbeat", true);
                 }
@@ -824,10 +845,11 @@ void SlaveAgent::log_message(const std::string& message, bool verbose_only) {
 std::string SlaveAgent::get_current_timestamp_str() {
     auto now = std::chrono::system_clock::now();
     auto now_time_t = std::chrono::system_clock::to_time_t(now);
-    std::tm* now_tm = std::localtime(&now_time_t);
-    
+    std::tm now_tm{};
+    localtime_r(&now_time_t, &now_tm);
+
     std::stringstream ss;
-    ss << std::put_time(now_tm, "%Y%m%d_%H%M%S");
+    ss << std::put_time(&now_tm, "%Y%m%d_%H%M%S");
     return ss.str();
 }
 
@@ -845,8 +867,9 @@ void SlaveAgent::write_timestamps_to_txt(const std::vector<uint64_t>& timestamps
         txt_file << "# Generated: ";
         auto now = std::chrono::system_clock::now();
         std::time_t now_time_t = std::chrono::system_clock::to_time_t(now);
-        std::tm* now_tm = std::localtime(&now_time_t);
-        txt_file << std::put_time(now_tm, "%Y-%m-%d %H:%M:%S") << std::endl;
+        std::tm now_tm{};
+        localtime_r(&now_time_t, &now_tm);
+        txt_file << std::put_time(&now_tm, "%Y-%m-%d %H:%M:%S") << std::endl;
         txt_file << "# Time Controller: " << config_.slave_tc_address << std::endl;
         txt_file << "# Total timestamps: " << timestamps.size() << std::endl;
         txt_file << "#" << std::endl;
