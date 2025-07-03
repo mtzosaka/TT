@@ -52,18 +52,36 @@ This will create the `master_timestamp` and `slave_timestamp` executables in the
 
 ### Running the Slave
 
-Start the slave component first:
+Start the slave component first. Make sure the port values match the master configuration:
 
 ```bash
-./slave_timestamp --slave-tc <IP> --master-address <IP> --sync-port 5562 --verbose --text-output
+./slave_timestamp \
+  --slave-tc <IP> \
+  --master-address <IP> \
+  --trigger-port 5557 \
+  --status-port 5559 \
+  --file-port 5560 \
+  --command-port 5561 \
+  --sync-port 5562 \
+  --verbose --text-output
 ```
 
 ### Running the Master
 
-After the slave is running, start the master component:
+After the slave is running, start the master component with the same port numbers:
 
 ```bash
-./master_timestamp --master-tc <IP> --slave-address <IP> --sync-port 5562 --duration <seconds> --channels <list> --verbose --text-output
+./master_timestamp \
+  --master-tc <IP> \
+  --slave-address <IP> \
+  --trigger-port 5557 \
+  --status-port 5559 \
+  --file-port 5560 \
+  --command-port 5561 \
+  --sync-port 5562 \
+  --duration <seconds> \
+  --channels <list> \
+  --verbose --text-output
 ```
 
 ### Command-Line Options

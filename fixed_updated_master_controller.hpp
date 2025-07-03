@@ -81,6 +81,7 @@ private:
     zmq::socket_t trigger_socket_;
     zmq::socket_t status_socket_;
     zmq::socket_t file_socket_;
+    zmq::socket_t status_socket_;
     zmq::socket_t command_socket_;
     zmq::socket_t sync_socket_;
     zmq::socket_t local_tc_socket_;

@@ -10,7 +10,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Include directories
-include_directories(${CMAKE_SOURCE_DIR} ${ZMQ_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/include)
+include_directories(${CMAKE_SOURCE_DIR} ${ZMQ_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/upload/src)
 
 # Copy header files to build directory
 configure_file(${CMAKE_SOURCE_DIR}/fixed_updated_master_controller.hpp
