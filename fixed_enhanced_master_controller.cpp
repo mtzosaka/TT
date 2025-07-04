@@ -4,6 +4,7 @@
 #include <sstream>
 #include <iomanip>
 #include <chrono>
+#include <ctime>
 #include <thread>
 #include <filesystem>
 #include <algorithm>
@@ -40,6 +41,14 @@ bool MasterController::initialize() {
         trigger_socket_.bind(trigger_endpoint);
         log_message("Trigger socket bound");
         
+        // Socket for receiving status/heartbeat messages from slave
+        log_message("Creating status socket (PULL)...");
+        status_socket_ = zmq::socket_t(context_, zmq::socket_type::pull);
+        std::string status_endpoint = "tcp://*:" + std::to_string(config_.status_port);
+        log_message("Binding status socket to: " + status_endpoint);
+        status_socket_.bind(status_endpoint);
+        log_message("Status socket bound");
+
         // Socket for receiving files from slave
         log_message("Creating file socket (PULL)...");
         file_socket_ = zmq::socket_t(context_, zmq::socket_type::pull);
@@ -91,6 +100,7 @@ bool MasterController::initialize() {
         }
         
         // Start monitoring threads
+        running_ = true;
         start_monitor_thread();
         // Note: File receiver thread will be started when master is ready to receive data
         
@@ -117,12 +127,12 @@ void MasterController::stop() {
         // Add a small delay to ensure threads see the updated running_ flag
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         
-        if (monitor_thread_.joinable()) {
+        if (status_thread_.joinable()) {
             try {
-                monitor_thread_.join();
+                status_thread_.join();
                 log_message("Status monitor thread stopped");
             } catch (const std::exception& e) {
-                log_message("ERROR: Failed to join monitor thread: " + std::string(e.what()));
+                log_message("ERROR: Failed to join status thread: " + std::string(e.what()));
             }
         }
         
@@ -138,6 +148,7 @@ void MasterController::stop() {
         // Close sockets
         try {
             trigger_socket_.close();
+            status_socket_.close();
             file_socket_.close();
             status_socket_.close();
             command_socket_.close();
@@ -511,7 +522,10 @@ bool MasterController::start_acquisition(double duration, const std::vector<int>
                 latest_channels_ = all_channels;
                 
                 log_message("Master data collection completed successfully");
-                
+
+                // Finalize with slave before requesting partial data
+                finalize_communication();
+
                 // Now request data from slave in controlled manner with proper response handling
                 log_message("Master is ready - requesting partial data from slave for synchronization...");
                 
@@ -623,9 +637,14 @@ void MasterController::log_message(const std::string& message, bool verbose_only
 std::string MasterController::get_current_timestamp_str() {
     auto now = std::chrono::system_clock::now();
     auto time_t = std::chrono::system_clock::to_time_t(now);
+
     std::tm tm;
     localtime_r(&time_t, &tm);
     
+
+    std::tm tm{};
+    localtime_r(&time_t, &tm);
+
     std::ostringstream oss;
     oss << std::put_time(&tm, "%Y%m%d_%H%M%S");
     return oss.str();
@@ -670,13 +689,30 @@ void MasterController::write_offset_report(const std::string& filename,
 
 
 void MasterController::start_monitor_thread() {
+
     monitor_thread_ = std::thread([this]() {
         log_message("Status monitor thread started");
         running_ = true;
+
+
+    monitor_thread_ = std::thread([this]() {
+        log_message("Status monitor thread started");
+        running_ = true;
+
+
+    monitor_thread_ = std::thread([this]() {
+        log_message("Status monitor thread started");
+        running_ = true;
+
+    status_thread_ = std::thread([this]() {
+        log_message("Status monitor thread started");
+
+
         status_socket_.set(zmq::sockopt::rcvtimeo, 1000);
         while (running_) {
             try {
                 zmq::message_t msg;
+
                 auto result = status_socket_.recv(msg, zmq::recv_flags::none);
                 if (result.has_value()) {
                     std::string data(static_cast<char*>(msg.data()), msg.size());
@@ -691,6 +727,30 @@ void MasterController::start_monitor_thread() {
             }
         }
         log_message("Status monitor thread exiting");
+
+
+
+                auto res = status_socket_.recv(msg, zmq::recv_flags::none);
+                if (res.has_value()) {
+                    std::string msg_str(static_cast<char*>(msg.data()), msg.size());
+                    json status = json::parse(msg_str);
+                    if (status.contains("type") && status["type"] == "heartbeat") {
+                        log_message("Received heartbeat from slave", true);
+                    } else {
+                        log_message("Status message from slave: " + msg_str, true);
+                    }
+                }
+            } catch (const zmq::error_t& e) {
+                if (e.num() != EAGAIN) {
+                    log_message(std::string("Status socket error: ") + e.what());
+                }
+            } catch (const std::exception& e) {
+                log_message(std::string("Status monitor error: ") + e.what());
+            }
+        }
+        log_message("Status monitor thread stopped");
+
+
     });
 }
 
@@ -738,6 +798,13 @@ void MasterController::start_file_receiver_thread() {
                             } catch (const std::exception& e) {
                                 log_message("ERROR: Failed to perform synchronization calculation: " + std::string(e.what()));
                             }
+
+                            // Send acknowledgment to slave
+                            json ack_cmd;
+                            ack_cmd["command"] = "partial_data_ack";
+                            ack_cmd["sequence"] = command_sequence_++;
+                            json ack_resp;
+                            send_command_to_slave(ack_cmd, ack_resp);
                         } else {
                             log_message("ERROR: Failed to save partial data file: " + filepath);
                         }
@@ -1172,6 +1239,62 @@ void MasterController::request_text_data_from_slave() {
         
     } catch (const std::exception& e) {
         log_message("ERROR: Failed to request text data from slave: " + std::string(e.what()));
+    }
+}
+
+bool MasterController::finalize_communication() {
+    try {
+        log_message("Sending finalize command to slave...");
+
+        json cmd;
+        cmd["command"] = "finalize";
+        cmd["sequence"] = command_sequence_++;
+
+        json response;
+        if (send_command_to_slave(cmd, response)) {
+            if (response.contains("status") && response["status"] == "ok") {
+                log_message("Slave confirmed finalize request");
+                return true;
+            } else {
+                log_message("ERROR: Slave rejected finalize request");
+            }
+        } else {
+            log_message("ERROR: No response to finalize command");
+        }
+    } catch (const std::exception& e) {
+        log_message("ERROR: Failed to finalize communication: " + std::string(e.what()));
+    }
+    return false;
+}
+
+bool MasterController::send_command_to_slave(json& command, json& response) {
+    try {
+        std::string cmd_str = command.dump();
+        zmq::message_t cmd_msg(cmd_str.size());
+        memcpy(cmd_msg.data(), cmd_str.c_str(), cmd_str.size());
+
+        command_socket_.set(zmq::sockopt::sndtimeo, 5000);
+        command_socket_.set(zmq::sockopt::rcvtimeo, 5000);
+
+        auto send_res = command_socket_.send(cmd_msg, zmq::send_flags::none);
+        if (!send_res.has_value()) {
+            log_message("ERROR: Failed to send command to slave");
+            return false;
+        }
+
+        zmq::message_t reply;
+        auto recv_res = command_socket_.recv(reply);
+        if (!recv_res.has_value()) {
+            log_message("ERROR: No reply from slave for command");
+            return false;
+        }
+
+        std::string reply_str(static_cast<char*>(reply.data()), reply.size());
+        response = json::parse(reply_str);
+        return true;
+    } catch (const std::exception& e) {
+        log_message("ERROR: send_command_to_slave failed: " + std::string(e.what()));
+        return false;
     }
 }
 
