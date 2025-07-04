@@ -1,5 +1,5 @@
 // Fixed Master Controller with improved exception handling and thread safety
-#include "fixed_master_controller.hpp"
+#include "fixed_updated_master_controller.hpp"
 #include "common.hpp"
 #include "streams.hpp"
 #include <iostream>
@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <numeric>
+#include <vector>
 #include <cmath>
 #include <atomic>
 #include <mutex>
@@ -53,10 +54,18 @@ bool MasterController::initialize() {
         // Socket for receiving files from slave
         log_message("Creating file socket (PULL)...");
         file_socket_ = zmq::socket_t(context_, zmq::socket_type::pull);
-        std::string file_endpoint = "tcp://*:" + std::to_string(config_.status_port);
+        std::string file_endpoint = "tcp://*:" + std::to_string(config_.file_port);
         log_message("Binding file socket to: " + file_endpoint);
         file_socket_.bind(file_endpoint);
         log_message("File socket bound");
+
+        // Socket for receiving status/heartbeat messages
+        log_message("Creating status socket (PULL)...");
+        status_socket_ = zmq::socket_t(context_, zmq::socket_type::pull);
+        std::string status_endpoint = "tcp://*:" + std::to_string(config_.status_port);
+        log_message("Binding status socket to: " + status_endpoint);
+        status_socket_.bind(status_endpoint);
+        log_message("Status socket bound");
         
         // Socket for sending commands to slave
         log_message("Creating command socket (REQ)...");
@@ -175,6 +184,13 @@ void MasterController::stop() {
                 if (file_socket_.handle() != nullptr) {
                     file_socket_.set(zmq::sockopt::linger, 0);
                     file_socket_.close();
+                }
+            } catch (...) {}
+
+            try {
+                if (status_socket_.handle() != nullptr) {
+                    status_socket_.set(zmq::sockopt::linger, 0);
+                    status_socket_.close();
                 }
             } catch (...) {}
             
@@ -676,43 +692,20 @@ void MasterController::start_file_receiver_thread() {
                 zmq::message_t file_msg;
                 auto result = file_socket_.recv(file_msg);
                 
-                if (result.has_value()) {
-                    std::string file_data(static_cast<char*>(file_msg.data()), file_msg.size());
-                    
+                if (result.has_value() && file_msg.size() > 0) {
+                    // Save the raw binary message as a file
+                    std::string filename = "slave_file_" + std::to_string(file_counter_++) + ".bin";
+                    fs::path output_path = fs::path(config_.output_dir) / filename;
                     try {
-                        json file_json = json::parse(file_data);
-                        
-                        if (file_json.contains("type") && file_json["type"] == "heartbeat") {
-                            // Process heartbeat
-                            log_message("Received heartbeat from slave", true);
+                        std::ofstream outfile(output_path, std::ios::binary);
+                        if (!outfile) {
+                            throw std::runtime_error("Failed to open file for writing: " + output_path.string());
                         }
-                        else if (file_json.contains("filename") && file_json.contains("data")) {
-                            // Process file
-                            std::string filename = file_json["filename"].get<std::string>();
-                            std::string data = file_json["data"].get<std::string>();
-                            
-                            // Save file to output directory
-                            fs::path output_path = fs::path(config_.output_dir) / filename;
-                            
-                            try {
-                                std::ofstream outfile(output_path, std::ios::binary);
-                                if (!outfile) {
-                                    throw std::runtime_error("Failed to open file for writing: " + output_path.string());
-                                }
-                                
-                                outfile.write(data.c_str(), data.size());
-                                outfile.close();
-                                
-                                log_message("Received file from slave: " + filename);
-                                file_counter_++;
-                            }
-                            catch (const std::exception& e) {
-                                log_message("ERROR: Failed to save received file: " + std::string(e.what()));
-                            }
-                        }
-                    }
-                    catch (const std::exception& e) {
-                        log_message("ERROR: Failed to process received data: " + std::string(e.what()), true);
+                        outfile.write(static_cast<char*>(file_msg.data()), file_msg.size());
+                        outfile.close();
+                        log_message("Received file from slave: " + filename);
+                    } catch (const std::exception& e) {
+                        log_message("ERROR: Failed to save received file: " + std::string(e.what()));
                     }
                 }
             }
@@ -787,10 +780,11 @@ void MasterController::log_message(const std::string& message, bool verbose_only
 std::string MasterController::get_current_timestamp_str() {
     auto now = std::chrono::system_clock::now();
     auto now_time_t = std::chrono::system_clock::to_time_t(now);
-    std::tm* now_tm = std::localtime(&now_time_t);
-    
+    std::tm now_tm;
+    localtime_r(&now_time_t, &now_tm);
+
     std::stringstream ss;
-    ss << std::put_time(now_tm, "%Y%m%d_%H%M%S");
+    ss << std::put_time(&now_tm, "%Y%m%d_%H%M%S");
     return ss.str();
 }
 

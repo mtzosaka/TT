@@ -1,5 +1,5 @@
 // Fixed Slave Agent with improved exception handling and thread safety
-#include "fixed_slave_agent.hpp"
+#include "fixed_updated_slave_agent.hpp"
 #include "common.hpp"
 #include "streams.hpp"
 #include <iostream>
@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <numeric>
+#include <vector>
 #include <atomic>
 #include <mutex>
 #include <future>
@@ -52,10 +53,18 @@ bool SlaveAgent::initialize() {
         // Socket for sending files to master
         log_message("Creating file socket (PUSH)...");
         file_socket_ = zmq::socket_t(context_, zmq::socket_type::push);
-        std::string file_endpoint = "tcp://" + config_.master_address + ":" + std::to_string(config_.status_port);
+        std::string file_endpoint = "tcp://" + config_.master_address + ":" + std::to_string(config_.file_port);
         log_message("Connecting file socket to: " + file_endpoint);
         file_socket_.connect(file_endpoint);
         log_message("File socket connected");
+
+        // Socket for sending heartbeat/status messages
+        log_message("Creating status socket (PUSH)...");
+        status_socket_ = zmq::socket_t(context_, zmq::socket_type::push);
+        std::string status_endpoint = "tcp://" + config_.master_address + ":" + std::to_string(config_.status_port);
+        log_message("Connecting status socket to: " + status_endpoint);
+        status_socket_.connect(status_endpoint);
+        log_message("Status socket connected");
         
         // Socket for receiving commands from master
         log_message("Creating command socket (REP)...");
@@ -72,6 +81,11 @@ bool SlaveAgent::initialize() {
         log_message("Connecting sync socket to: " + sync_endpoint);
         sync_socket_.connect(sync_endpoint);
         log_message("Sync socket connected");
+
+        // Set socket options for better reliability
+        int linger = 1000;  // 1 second linger period
+        sync_socket_.set(zmq::sockopt::linger, linger);
+        status_socket_.set(zmq::sockopt::linger, linger);
         
         // Connect to local Time Controller
         log_message("Connecting to local Time Controller...");
@@ -187,6 +201,13 @@ void SlaveAgent::stop() {
                 if (file_socket_.handle() != nullptr) {
                     file_socket_.set(zmq::sockopt::linger, 0);
                     file_socket_.close();
+                }
+            } catch (...) {}
+
+            try {
+                if (status_socket_.handle() != nullptr) {
+                    status_socket_.set(zmq::sockopt::linger, 0);
+                    status_socket_.close();
                 }
             } catch (...) {}
             
@@ -444,7 +465,7 @@ void SlaveAgent::start_heartbeat_thread() {
                     std::string heartbeat_str = heartbeat.dump();
                     zmq::message_t heartbeat_msg(heartbeat_str.size());
                     memcpy(heartbeat_msg.data(), heartbeat_str.c_str(), heartbeat_str.size());
-                    file_socket_.send(heartbeat_msg, zmq::send_flags::none);
+                    status_socket_.send(heartbeat_msg, zmq::send_flags::none);
                     
                     log_message("Sent heartbeat", true);
                 }
@@ -690,9 +711,9 @@ void SlaveAgent::send_file_to_master(const std::string& filename) {
             throw std::runtime_error("File is empty: " + filename);
         }
         
-        // Read file content
-        std::string file_content(file_size, '\0');
-        file.read(&file_content[0], file_size);
+        // Read file content as binary
+        std::vector<uint8_t> file_content(file_size);
+        file.read(reinterpret_cast<char*>(file_content.data()), file_size);
         
         if (!file) {
             throw std::runtime_error("Failed to read file content: " + filename);
@@ -700,16 +721,9 @@ void SlaveAgent::send_file_to_master(const std::string& filename) {
         
         file.close();
         
-        // Create JSON message with file data
-        json file_msg;
-        file_msg["filename"] = fs::path(filename).filename().string();
-        file_msg["size"] = file_size;
-        file_msg["data"] = file_content;
-        
-        // Send the file
-        std::string msg_str = file_msg.dump();
-        zmq::message_t message(msg_str.size());
-        memcpy(message.data(), msg_str.c_str(), msg_str.size());
+        // Send the raw binary file content directly
+        zmq::message_t message(file_size);
+        memcpy(message.data(), file_content.data(), file_size);
         
         auto send_result = file_socket_.send(message, zmq::send_flags::none);
         if (!send_result.has_value()) {
@@ -734,10 +748,11 @@ void SlaveAgent::log_message(const std::string& message, bool verbose_only) {
 std::string SlaveAgent::get_current_timestamp_str() {
     auto now = std::chrono::system_clock::now();
     auto now_time_t = std::chrono::system_clock::to_time_t(now);
-    std::tm* now_tm = std::localtime(&now_time_t);
+    std::tm now_tm;
+    localtime_r(&now_time_t, &now_tm);
     
     std::stringstream ss;
-    ss << std::put_time(now_tm, "%Y%m%d_%H%M%S");
+    ss << std::put_time(&now_tm, "%Y%m%d_%H%M%S");
     return ss.str();
 }
 
@@ -755,8 +770,9 @@ void SlaveAgent::write_timestamps_to_txt(const std::vector<uint64_t>& timestamps
         txt_file << "# Generated: ";
         auto now = std::chrono::system_clock::now();
         std::time_t now_time_t = std::chrono::system_clock::to_time_t(now);
-        std::tm* now_tm = std::localtime(&now_time_t);
-        txt_file << std::put_time(now_tm, "%Y-%m-%d %H:%M:%S") << std::endl;
+        std::tm now_tm;
+        localtime_r(&now_time_t, &now_tm);
+        txt_file << std::put_time(&now_tm, "%Y-%m-%d %H:%M:%S") << std::endl;
         txt_file << "# Time Controller: " << config_.slave_tc_address << std::endl;
         txt_file << "# Total timestamps: " << timestamps.size() << std::endl;
         txt_file << "#" << std::endl;
