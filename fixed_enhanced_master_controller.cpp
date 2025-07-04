@@ -699,8 +699,14 @@ void MasterController::start_monitor_thread() {
         log_message("Status monitor thread started");
         running_ = true;
 
+
+    monitor_thread_ = std::thread([this]() {
+        log_message("Status monitor thread started");
+        running_ = true;
+
     status_thread_ = std::thread([this]() {
         log_message("Status monitor thread started");
+
 
         status_socket_.set(zmq::sockopt::rcvtimeo, 1000);
         while (running_) {
@@ -721,6 +727,7 @@ void MasterController::start_monitor_thread() {
             }
         }
         log_message("Status monitor thread exiting");
+
 
 
                 auto res = status_socket_.recv(msg, zmq::recv_flags::none);

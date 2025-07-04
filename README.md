@@ -40,13 +40,46 @@ Communication between components uses ZeroMQ sockets:
 
 1. Extract the package to a directory of your choice
 2. Navigate to the extracted directory
-3. Run the build script:
+3. Create a build directory and compile the project using CMake:
 
 ```bash
-./build.sh
+mkdir build && cd build
+cmake ..
+cmake --build . -j $(nproc)
 ```
 
-This will create the `master_timestamp` and `slave_timestamp` executables in the `build` directory.
+The `master_timestamp` and `slave_timestamp` executables will be generated in the `build` directory.
+
+### Quick Start Example
+
+To quickly verify that the master and slave communicate correctly, open two terminal windows and run the components with their default port numbers. Start the slave first:
+
+```bash
+./build/slave_timestamp --slave-tc 127.0.0.1 --master-address 127.0.0.1 --verbose
+```
+
+Then launch the master:
+
+```bash
+./build/master_timestamp --master-tc 127.0.0.1 --slave-address 127.0.0.1 \
+  --duration 2.0 --channels 1,2,3,4 --verbose
+```
+
+Both programs will use the default port values listed below, so no extra options are required unless you need to change the ports.
+
+### Running with Custom Ports
+
+If the default ports are unavailable, specify matching custom ports when launching both components. For example:
+
+```bash
+./build/slave_timestamp --slave-tc 127.0.0.1 --master-address 127.0.0.1 \
+  --trigger-port 6001 --status-port 6003 --file-port 6004 \
+  --command-port 6005 --sync-port 6006 --verbose
+
+./build/master_timestamp --master-tc 127.0.0.1 --slave-address 127.0.0.1 \
+  --trigger-port 6001 --status-port 6003 --file-port 6004 \
+  --command-port 6005 --sync-port 6006 --duration 2.0 --channels 1,2,3,4 --verbose
+```
 
 ### Quick Start Example
 
